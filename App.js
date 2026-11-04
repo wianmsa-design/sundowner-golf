@@ -22,7 +22,7 @@ export default function App() {
   return (
     <AppProvider>
       <NavigationContainer>
-        <StatusBar style="light" backgroundColor={theme.colors.background} />
+        <StatusBar style="light" />
         <Tab.Navigator
           initialRouteName="ScoreEntry"
           screenOptions={{
