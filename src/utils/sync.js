@@ -1,5 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
-import { GITHUB_REPO, DATA_BRANCH, DATA_PATH, DATA_URL } from '../config';
+import { GITHUB_REPO, DATA_BRANCH, DATA_PATH, DATA_URL, DATA_API_URL } from '../config';
 
 const TOKEN_KEY = 'githubPublishToken';
 
@@ -114,11 +114,7 @@ export const publishSnapshot = async (token, snapshot) => {
 };
 
 // ---------- Fetch (viewer) ----------
-export const fetchRemoteSnapshot = async () => {
-  // Minute-granularity cache buster: fresh within a minute, shared within the same minute.
-  const res = await fetch(`${DATA_URL}?t=${Math.floor(Date.now() / 60000)}`);
-  if (!res.ok) throw new Error(`Data fetch failed (${res.status})`);
-  const text = await res.text();
+const parseSnapshot = (text) => {
   let data;
   try {
     data = JSON.parse(text);
@@ -127,4 +123,23 @@ export const fetchRemoteSnapshot = async () => {
   }
   if (!isValidSnapshot(data)) throw new Error('Data file has an unexpected shape');
   return data;
+};
+
+const fetchText = async (url, options) => {
+  const res = await fetch(url, options);
+  if (!res.ok) throw new Error(`Data fetch failed (${res.status})`);
+  return res.text();
+};
+
+export const fetchRemoteSnapshot = async () => {
+  // A test override (EXPO_PUBLIC_DATA_URL) is used directly.
+  if (process.env.EXPO_PUBLIC_DATA_URL) {
+    return parseSnapshot(await fetchText(DATA_URL));
+  }
+  try {
+    return parseSnapshot(await fetchText(DATA_API_URL, { headers: { Accept: 'application/vnd.github.raw+json' } }));
+  } catch (e) {
+    // API unavailable or rate-limited: fall back to the static file (may be a few minutes old)
+    return parseSnapshot(await fetchText(`${DATA_URL}?t=${Math.floor(Date.now() / 60000)}`));
+  }
 };
