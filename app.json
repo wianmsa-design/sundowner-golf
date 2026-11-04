@@ -17,7 +17,13 @@
       }
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "Sundowner Golf",
+      "shortName": "Sundowner",
+      "backgroundColor": "#1a1a1a",
+      "themeColor": "#1a1a1a"
     },
     "extra": {
       "eas": {
@@ -36,7 +42,11 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
-    ]
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "baseUrl": "/sundowner-golf"
+    }
   }
 }

@@ -9,6 +9,7 @@ import {
   Alert,
   TextInput,
   Modal,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { captureRef } from 'react-native-view-shot';
@@ -226,7 +227,7 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function OverviewScreen({ navigation }) {
-  const { currentSeason, players, scores, setScores, setNavigationTarget } = useContext(AppContext);
+  const { currentSeason, players, scores, setScores, setNavigationTarget, readOnly } = useContext(AppContext);
   const countingRoundsRef = useRef();
   const [editingScore, setEditingScore] = useState(null);
   const [editValue, setEditValue] = useState('');
@@ -346,7 +347,7 @@ export default function OverviewScreen({ navigation }) {
 
   useEffect(() => {
     navigation.setOptions({
-      headerRight: () => (
+      headerRight: () => Platform.OS === 'web' ? null : (
         <TouchableOpacity style={styles.headerShareButton} onPress={handleShare}>
           <MaterialIcons name="share" size={24} color={theme.colors.text} />
         </TouchableOpacity>
@@ -376,6 +377,7 @@ export default function OverviewScreen({ navigation }) {
   const columnWidth = (screenWidth - tableMargins) / numColumns;
 
   const handleScoreClick = (weekKey, playerId, currentScore) => {
+    if (readOnly) return;
     setEditingScore({ weekKey, playerId, currentScore });
     setEditValue(currentScore?.toString() || '');
   };
@@ -396,6 +398,7 @@ export default function OverviewScreen({ navigation }) {
   };
 
   const handleWeekClick = (weekKey) => {
+    if (readOnly) return;
     const parts = weekKey.split('_');
     const weekNum = parseInt(parts[2]);
     const roundNum = parts[3] ? parseInt(parts[3]) : 1;

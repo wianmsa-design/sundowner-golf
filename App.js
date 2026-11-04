@@ -1,30 +1,71 @@
 import 'react-native-gesture-handler';
-import React from 'react';
+import React, { useContext } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { AppProvider } from './src/contexts/AppContext';
+import { AppProvider, AppContext } from './src/contexts/AppContext';
+import { READ_ONLY } from './src/config';
 import { theme } from './src/utils/theme';
 
 // Import screens
-import ScoreEntryScreen from './src/screens/ScoreEntryScreen';
 import LeaderboardScreen from './src/screens/LeaderboardScreen';
 import AwardsScreen from './src/screens/AwardsScreen';
 import OverviewScreen from './src/screens/OverviewScreen';
-import ManagementScreen from './src/screens/ManagementScreen';
 import HistoricalScoresScreen from './src/screens/HistoricalScoresScreen';
 import LifetimeStatsScreen from './src/screens/LifetimeStatsScreen';
 
+// Editor screens are only loaded in the master app, so the read-only web build never bundles them.
+const ScoreEntryScreen = READ_ONLY ? null : require('./src/screens/ScoreEntryScreen').default;
+const ManagementScreen = READ_ONLY ? null : require('./src/screens/ManagementScreen').default;
+
 const Tab = createBottomTabNavigator();
+
+function SyncBanner() {
+  const { readOnly, lastSynced, syncError, activeSeasons, selectedSeasonId, setSelectedSeasonId } = useContext(AppContext);
+  if (!readOnly) return null;
+  const text = syncError
+    ? `Couldn't update (${syncError}). Showing last saved data.`
+    : lastSynced
+      ? `Updated ${lastSynced.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      : 'Loading...';
+  return (
+    <View style={[bannerStyles.bar, syncError && bannerStyles.barError]}>
+      <Text style={bannerStyles.text}>{text}</Text>
+      {activeSeasons.length > 1 && (
+        <Picker
+          selectedValue={selectedSeasonId}
+          onValueChange={setSelectedSeasonId}
+          style={bannerStyles.picker}
+          dropdownIconColor={theme.colors.text}
+        >
+          {activeSeasons.map((season) => (
+            <Picker.Item key={season.id} label={`${season.year} - Season ${season.season}`} value={season.id} />
+          ))}
+        </Picker>
+      )}
+    </View>
+  );
+}
+
+const bannerStyles = StyleSheet.create({
+  bar: { backgroundColor: theme.colors.surface, paddingVertical: 4, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
+  barError: { backgroundColor: '#5a2a2a' },
+  picker: { color: theme.colors.text, backgroundColor: theme.colors.background, marginTop: 4 },
+  text: { fontSize: 12, color: theme.colors.textSecondary, textAlign: 'center' },
+});
 
 export default function App() {
   return (
     <AppProvider>
       <NavigationContainer>
         <StatusBar style="light" />
+        <View style={{ flex: 1 }}>
+        <SyncBanner />
         <Tab.Navigator
-          initialRouteName="ScoreEntry"
+          initialRouteName={READ_ONLY ? 'SeasonResults' : 'ScoreEntry'}
           screenOptions={{
             tabBarStyle: {
               backgroundColor: theme.colors.surface,
@@ -51,6 +92,7 @@ export default function App() {
             },
           }}
         >
+          {!READ_ONLY && (
           <Tab.Screen
             name="ScoreEntry"
             component={ScoreEntryScreen}
@@ -61,6 +103,7 @@ export default function App() {
               ),
             })}
           />
+          )}
           <Tab.Screen
             name="SeasonResults"
             component={LeaderboardScreen}
@@ -111,6 +154,7 @@ export default function App() {
               ),
             }}
           />
+          {!READ_ONLY && (
           <Tab.Screen
             name="Management"
             component={ManagementScreen}
@@ -121,7 +165,9 @@ export default function App() {
               ),
             }}
           />
+          )}
         </Tab.Navigator>
+        </View>
       </NavigationContainer>
     </AppProvider>
   );

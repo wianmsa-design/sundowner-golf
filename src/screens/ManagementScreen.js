@@ -21,9 +21,84 @@ import * as Sharing from 'expo-sharing';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { AppContext } from '../contexts/AppContext';
 import { theme } from '../utils/theme';
+import { getToken, setToken } from '../utils/sync';
 import { getNextSeasonInfo, calculateTop8Scores, calculateAverage, computeLifetimeStatsFromHistory, compareStandings } from '../utils/helpers';
 
 const Tab = createMaterialTopTabNavigator();
+
+// Defined at module level (not inside ManagementScreen) so typing in the token box keeps focus.
+function PublishSection({ publishStatus, publishNow }) {
+  const [hasToken, setHasToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+
+  React.useEffect(() => {
+    getToken().then(t => setHasToken(!!t));
+  }, []);
+
+  const saveToken = async () => {
+    if (!tokenInput.trim()) return;
+    await setToken(tokenInput);
+    setTokenInput('');
+    setHasToken(true);
+    Alert.alert('Saved', 'Token saved on this device. Tap Publish now to upload your data.');
+  };
+
+  const removeToken = async () => {
+    await setToken(null);
+    setHasToken(false);
+  };
+
+  const when = publishStatus.time ? new Date(publishStatus.time).toLocaleString() : null;
+  let statusText = 'Not published yet';
+  let statusColor = theme.colors.textSecondary;
+  if (publishStatus.state === 'ok') {
+    statusText = `Last published: ${when}`;
+    statusColor = theme.colors.primary;
+  } else if (publishStatus.state === 'publishing') {
+    statusText = 'Publishing...';
+  } else if (publishStatus.state === 'error') {
+    statusText = `Failed (${when}): ${publishStatus.message}. Will retry automatically.`;
+    statusColor = theme.colors.accent;
+  }
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Website Publishing</Text>
+      <Text style={[styles.currentSeasonText, { color: statusColor }]}>{statusText}</Text>
+
+      {hasToken ? (
+        <>
+          <TouchableOpacity style={styles.addButton} onPress={publishNow}>
+            <MaterialIcons name="cloud-upload" size={20} color={theme.colors.text} />
+            <Text style={styles.addButtonText}>Publish now</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.addButton, styles.deleteSeasonButton]} onPress={removeToken}>
+            <MaterialIcons name="vpn-key" size={20} color={theme.colors.text} />
+            <Text style={styles.addButtonText}>Remove GitHub token</Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <>
+          <Text style={styles.inputLabel}>GitHub token</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="github_pat_..."
+            placeholderTextColor={theme.colors.textSecondary}
+            value={tokenInput}
+            onChangeText={setTokenInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <TouchableOpacity style={styles.addButton} onPress={saveToken}>
+            <MaterialIcons name="save" size={20} color={theme.colors.text} />
+            <Text style={styles.addButtonText}>Save token</Text>
+          </TouchableOpacity>
+        </>
+      )}
+    </View>
+  );
+}
 
 export default function ManagementScreen() {
   const {
@@ -40,6 +115,8 @@ export default function ManagementScreen() {
     historicalSeasons,
     setHistoricalSeasons,
     setStoredLifetimeStats,
+    publishStatus,
+    publishNow,
   } = useContext(AppContext);
 
   const [addPlayerModal, setAddPlayerModal] = useState(false);
@@ -501,6 +578,8 @@ export default function ManagementScreen() {
           </>
         )}
       </View>
+
+      <PublishSection publishStatus={publishStatus} publishNow={publishNow} />
 
       {/* Data Management Section */}
       <View style={styles.section}>

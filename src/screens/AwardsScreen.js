@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -227,7 +228,7 @@ export default function AwardsScreen({ navigation }) {
 
   useEffect(() => {
     navigation.setOptions({
-      headerRight: () => (
+      headerRight: () => Platform.OS === 'web' ? null : (
         <TouchableOpacity
           style={styles.headerShareButton}
           onPress={handleShare}

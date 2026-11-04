@@ -401,7 +401,7 @@ function LeaderboardTab({ currentHistoricalSeason, fallbackPlayers }) {
 }
 
 export default function HistoricalScoresScreen({ navigation }) {
-  const { historicalSeasons, setHistoricalSeasons, players } = useContext(AppContext);
+  const { historicalSeasons, setHistoricalSeasons, players, readOnly } = useContext(AppContext);
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedSeason, setSelectedSeason] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -475,7 +475,7 @@ export default function HistoricalScoresScreen({ navigation }) {
   useEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        currentHistoricalSeason ? (
+        currentHistoricalSeason && !readOnly ? (
           <TouchableOpacity
             style={styles.headerDeleteButton}
             onPress={() => setShowDeleteConfirm(true)}

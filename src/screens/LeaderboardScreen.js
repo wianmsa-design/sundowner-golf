@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { captureRef } from 'react-native-view-shot';
@@ -164,7 +165,7 @@ export default function LeaderboardScreen({ navigation }) {
 
   useEffect(() => {
     navigation.setOptions({
-      headerRight: () => (
+      headerRight: () => Platform.OS === 'web' ? null : (
         <TouchableOpacity
           style={styles.headerShareButton}
           onPress={handleShare}
@@ -199,7 +200,7 @@ export default function LeaderboardScreen({ navigation }) {
     );
   }
 
-  const handleShare = async () => {
+  async function handleShare() {
     if (!currentSeason) {
       Alert.alert('Error', 'No active season to share');
       return;
@@ -226,7 +227,7 @@ export default function LeaderboardScreen({ navigation }) {
       Alert.alert('Error', 'Failed to share leaderboard');
       console.error(error);
     }
-  };
+  }
 
   const iconColWidth = maxIconsInRow === 0 ? '0%' : maxIconsInRow === 1 ? '8%' : '14%';
   const nameColWidth = maxIconsInRow === 0 ? '32%' : maxIconsInRow === 1 ? '30%' : '24%';
