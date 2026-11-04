@@ -1,4 +1,4 @@
-import React, { useContext, useMemo, useState, useRef, useEffect } from 'react';
+import React, { useContext, useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,18 +15,18 @@ import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { AppContext } from '../contexts/AppContext';
-import { theme, getScoreColor, getContrastTextColor } from '../utils/theme';
-import { calculateTop8Scores, calculateAverage, calculateStandardDeviation } from '../utils/helpers';
+import { theme, getScoreColor } from '../utils/theme';
+import { calculateTop8Scores, calculateAverage, calculateStandardDeviation, getSeasonScores, getBestRoundHolder } from '../utils/helpers';
 
 const Tab = createMaterialTopTabNavigator();
 
-// Counting Rounds Tab Component
-function CountingRoundsTab({ countingRoundsRef, playerStats, columnWidth, overallBestRound }) {
+// ─── Counting Rounds Tab ──────────────────────────────────────────────────────
+
+function CountingRoundsTab({ countingRoundsRef, playerStats, columnWidth, overallBestRound, bestRoundHolderInfo }) {
   return (
     <View style={styles.tabContentContainer}>
       <ScrollView style={styles.scrollContainer}>
         <View style={styles.tableContainer} ref={countingRoundsRef} collapsable={false}>
-          {/* Header Row */}
           <View style={styles.tableRow}>
             <View style={[styles.cell, styles.headerCell, { width: columnWidth, height: columnWidth }]}>
               <Text style={styles.headerText}>Rd</Text>
@@ -43,7 +43,6 @@ function CountingRoundsTab({ countingRoundsRef, playerStats, columnWidth, overal
             ))}
           </View>
 
-          {/* Top 8 Rows */}
           {[0, 1, 2, 3, 4, 5, 6, 7].map((index) => (
             <View key={`rank-${index}`} style={[styles.tableRow, index % 2 === 1 && styles.alternatingRow]}>
               <View style={[styles.cell, { width: columnWidth, height: columnWidth }]}>
@@ -77,7 +76,6 @@ function CountingRoundsTab({ countingRoundsRef, playerStats, columnWidth, overal
             </View>
           ))}
 
-          {/* Top 8 Average Row */}
           <View style={[styles.tableRow, styles.averageRow]}>
             <View style={[styles.cell, styles.averageCell, { width: columnWidth, height: columnWidth }]}>
               <Text style={styles.averageText}>Avg</Text>
@@ -87,9 +85,7 @@ function CountingRoundsTab({ countingRoundsRef, playerStats, columnWidth, overal
                 key={player.id}
                 style={[styles.cell, styles.averageCell, { width: columnWidth, height: columnWidth }]}
               >
-                <Text style={styles.averageText}>
-                  {top8Average}
-                </Text>
+                <Text style={styles.averageText}>{top8Average}</Text>
               </View>
             ))}
           </View>
@@ -99,11 +95,11 @@ function CountingRoundsTab({ countingRoundsRef, playerStats, columnWidth, overal
   );
 }
 
-// All Rounds Tab Component
-function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBestRound, handleScoreClick, handleWeekClick }) {
+// ─── All Rounds Tab ───────────────────────────────────────────────────────────
+
+function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBestRound, bestRoundHolderInfo, handleScoreClick, handleWeekClick }) {
   return (
     <View style={styles.tabContentContainer}>
-      {/* Fixed Header Row */}
       <View style={styles.stickyHeader}>
         <View style={styles.tableRow}>
           <View style={[styles.cell, styles.headerCell, { width: columnWidth, height: columnWidth }]}>
@@ -124,7 +120,6 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
 
       <ScrollView style={styles.scrollContainer}>
         <View style={styles.tableContainer}>
-          {/* Average Row */}
           <View style={[styles.tableRow, styles.averageRow]}>
             <View style={[styles.cell, styles.averageCell, { width: columnWidth, height: columnWidth }]}>
               <Text style={styles.averageText}>Avg</Text>
@@ -134,14 +129,11 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
                 key={player.id}
                 style={[styles.cell, styles.averageCell, { width: columnWidth, height: columnWidth }]}
               >
-                <Text style={styles.averageText}>
-                  {allScoresAverage}
-                </Text>
+                <Text style={styles.averageText}>{allScoresAverage}</Text>
               </View>
             ))}
           </View>
 
-          {/* Standard Deviation Row */}
           <View style={[styles.tableRow, styles.stdDevRow]}>
             <View style={[styles.cell, styles.stdDevCell, { width: columnWidth, height: columnWidth }]}>
               <Text style={styles.stdDevText}>SD</Text>
@@ -151,14 +143,11 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
                 key={player.id}
                 style={[styles.cell, styles.stdDevCell, { width: columnWidth, height: columnWidth }]}
               >
-                <Text style={styles.stdDevText}>
-                  {allScoresStdDev}
-                </Text>
+                <Text style={styles.stdDevText}>{allScoresStdDev}</Text>
               </View>
             ))}
           </View>
 
-          {/* Number of Rounds Row */}
           <View style={[styles.tableRow, styles.numRoundsRow]}>
             <View style={[styles.cell, styles.numRoundsCell, { width: columnWidth, height: columnWidth }]}>
               <Text style={styles.numRoundsText}>#</Text>
@@ -168,18 +157,15 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
                 key={player.id}
                 style={[styles.cell, styles.numRoundsCell, { width: columnWidth, height: columnWidth }]}
               >
-                <Text style={styles.numRoundsText}>
-                  {numRounds}
-                </Text>
+                <Text style={styles.numRoundsText}>{numRounds}</Text>
               </View>
             ))}
           </View>
 
-          {/* Score Rows */}
           {weekKeysWithScores.map((weekKey, index) => {
             const parts = weekKey.split('_');
-            const weekNum = parseInt(parts[1]);
-            const roundNum = parts[2] ? parseInt(parts[2]) : null;
+            const weekNum = parseInt(parts[2]);
+            const roundNum = parts[3] ? parseInt(parts[3]) : null;
             const displayLabel = roundNum ? `${weekNum}.${roundNum}` : weekNum;
 
             return (
@@ -196,7 +182,9 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
                   const isDouble = weekScore?.isDouble;
                   const displayScore = score ? (isDouble ? score * 2 : score) : null;
                   const isTop8 = top8WeekKeys.has(weekKey);
-                  const isBestRound = score === overallBestRound && score === bestRound;
+                  const isBestRound = bestRoundHolderInfo &&
+                    player.id === bestRoundHolderInfo.playerId &&
+                    weekKey === bestRoundHolderInfo.weekKey;
                   const textColor = displayScore ? getScoreColor(score) : theme.colors.textSecondary;
 
                   return (
@@ -209,12 +197,12 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
                         <View style={[
                           styles.scoreBox,
                           isTop8 && !isBestRound && styles.top8Box,
-                          isBestRound && styles.bestRoundBox
+                          isBestRound && styles.bestRoundBox,
                         ]}>
                           <Text style={[
                             styles.cellText,
                             { color: textColor },
-                            (isTop8 || isBestRound) && { fontWeight: 'bold' }
+                            (isTop8 || isBestRound) && { fontWeight: 'bold' },
                           ]}>
                             {displayScore}
                             {isDouble && 'ᴰ'}
@@ -235,25 +223,29 @@ function AllRoundsTab({ playerStats, columnWidth, weekKeysWithScores, overallBes
   );
 }
 
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+
 export default function OverviewScreen({ navigation }) {
   const { currentSeason, players, scores, setScores, setNavigationTarget } = useContext(AppContext);
   const countingRoundsRef = useRef();
-  const [editingScore, setEditingScore] = useState(null); // { weekKey, playerId, currentScore }
+  const [editingScore, setEditingScore] = useState(null);
   const [editValue, setEditValue] = useState('');
-  const [deletingWeek, setDeletingWeek] = useState(null); // { weekKey, weekNum, roundNum }
+  const [deletingWeek, setDeletingWeek] = useState(null);
 
   const activePlayers = players.filter((p) => p.active);
 
-  // Calculate player statistics
+  // Season stats
   const playerStats = useMemo(() => {
+    const seasonScores = getSeasonScores(scores, currentSeason);
+
     const stats = activePlayers.map((player) => {
       const playerScores = [];
       const scoresByWeekKey = {};
 
-      Object.keys(scores).forEach((weekKey) => {
-        const weekData = scores[weekKey];
-        if (weekData[player.id]) {
-          const weekNum = parseInt(weekKey.split('_')[1]);
+      Object.keys(seasonScores).forEach((weekKey) => {
+        const weekData = seasonScores[weekKey];
+        if (weekData[player.id] && weekData[player.id].score > 0) {
+          const weekNum = parseInt(weekKey.split('_')[2]);
           playerScores.push({
             week: weekNum,
             score: weekData[player.id].score,
@@ -266,45 +258,23 @@ export default function OverviewScreen({ navigation }) {
       const top8 = calculateTop8Scores(playerScores);
       const top8WeekKeys = new Set();
 
-      // Map top8 scores back to their weekKeys
-      Object.keys(scores).forEach((weekKey) => {
-        const weekData = scores[weekKey];
+      Object.keys(seasonScores).forEach((weekKey) => {
+        const weekData = seasonScores[weekKey];
         if (weekData[player.id]) {
           const scoreData = weekData[player.id];
           const isInTop8 = top8.some(t =>
             t.score === scoreData.score && t.isDouble === scoreData.isDouble
           );
-          if (isInTop8) {
-            top8WeekKeys.add(weekKey);
-          }
+          if (isInTop8) top8WeekKeys.add(weekKey);
         }
       });
 
-      // For ALL ROUNDS tab: use actual scores (not doubled) for average and SD calculations
-      // Note: Scores are already stored as actual values, we just don't count them double for averages
-      const actualScores = playerScores.map(s => ({
-        score: s.score, // Use stored score as-is (it's already the actual score)
-        isDouble: false,
-      }));
+      const actualScores = playerScores.map(s => ({ score: s.score, isDouble: false }));
 
-      const allScoresAverage = actualScores.length > 0
-        ? calculateAverage(actualScores)
-        : '-';
-
-      // Calculate standard deviation for all scores using actual scores
-      const allScoresStdDev = actualScores.length > 0
-        ? calculateStandardDeviation(actualScores)
-        : '-';
-
-      // Calculate top 8 average
-      const top8Average = top8.length > 0
-        ? calculateAverage(top8)
-        : '-';
-
-      // Find best round (highest score)
-      const bestRound = playerScores.length > 0
-        ? Math.max(...playerScores.map(s => s.score))
-        : 0;
+      const allScoresAverage = actualScores.length > 0 ? calculateAverage(actualScores) : '-';
+      const allScoresStdDev = actualScores.length > 0 ? calculateStandardDeviation(actualScores) : '-';
+      const top8Average = top8.length > 0 ? calculateAverage(top8) : '-';
+      const bestRound = playerScores.length > 0 ? Math.max(...playerScores.map(s => s.score)) : 0;
 
       return {
         player,
@@ -322,51 +292,67 @@ export default function OverviewScreen({ navigation }) {
       };
     });
 
-    // Sort by top 8 average (highest to lowest)
-    return stats.sort((a, b) => b.top8AverageNum - a.top8AverageNum);
-  }, [activePlayers, scores]);
+    return stats.sort((a, b) => (b.top8AverageNum - a.top8AverageNum) || (b.allScoresAverageNum - a.allScoresAverageNum));
+  }, [activePlayers, scores, currentSeason]);
 
-  // Find the overall best round across all players
-  const overallBestRound = useMemo(() => {
-    if (playerStats.length === 0) return 0;
-    return Math.max(...playerStats.map(p => p.bestRound));
-  }, [playerStats]);
+  const handleShare = useCallback(async () => {
+    if (!currentSeason) {
+      Alert.alert('Error', 'No active season to share');
+      return;
+    }
+    try {
+      const uri = await captureRef(countingRoundsRef, {
+        format: 'png',
+        quality: 1,
+        result: 'tmpfile',
+      });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'image/png',
+          dialogTitle: 'Share Season Stats',
+        });
+      } else {
+        Alert.alert('Error', 'Sharing is not available on this device');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to share');
+      console.error(error);
+    }
+  }, [currentSeason]);
 
-  // Get all week keys that have at least one score
+  const bestRoundHolderInfo = useMemo(() => {
+    const seasonScores = getSeasonScores(scores, currentSeason);
+    return getBestRoundHolder(seasonScores);
+  }, [scores, currentSeason]);
+
+  const overallBestRound = bestRoundHolderInfo ? bestRoundHolderInfo.score : 0;
+
   const weekKeysWithScores = useMemo(() => {
-    const keys = Object.keys(scores).filter((weekKey) => {
-      const weekData = scores[weekKey];
-      return Object.keys(weekData).length > 0;
-    });
-
-    // Sort by week number, then by round number
+    const seasonScores = getSeasonScores(scores, currentSeason);
+    const keys = Object.keys(seasonScores).filter(weekKey =>
+      Object.keys(seasonScores[weekKey]).length > 0
+    );
     return keys.sort((a, b) => {
       const aParts = a.split('_');
       const bParts = b.split('_');
-      const aWeek = parseInt(aParts[1]);
-      const bWeek = parseInt(bParts[1]);
-
+      const aWeek = parseInt(aParts[2]);
+      const bWeek = parseInt(bParts[2]);
       if (aWeek !== bWeek) return aWeek - bWeek;
-
-      const aRound = aParts[2] ? parseInt(aParts[2]) : 1;
-      const bRound = bParts[2] ? parseInt(bParts[2]) : 1;
+      const aRound = aParts[3] ? parseInt(aParts[3]) : 1;
+      const bRound = bParts[3] ? parseInt(bParts[3]) : 1;
       return aRound - bRound;
     });
-  }, [scores]);
+  }, [scores, currentSeason]);
 
-  // Set up header button - must be before any conditional returns
   useEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity
-          style={styles.headerShareButton}
-          onPress={handleShare}
-        >
+        <TouchableOpacity style={styles.headerShareButton} onPress={handleShare}>
           <MaterialIcons name="share" size={24} color={theme.colors.text} />
         </TouchableOpacity>
       ),
     });
-  }, [navigation]);
+  }, [navigation, handleShare]);
 
   if (!currentSeason) {
     return (
@@ -386,37 +372,8 @@ export default function OverviewScreen({ navigation }) {
 
   const screenWidth = Dimensions.get('window').width;
   const numColumns = playerStats.length + 1;
-  const tableMargins = theme.spacing.sm * 2; // Left and right margins
+  const tableMargins = theme.spacing.sm * 2;
   const columnWidth = (screenWidth - tableMargins) / numColumns;
-
-  const handleShare = async () => {
-    if (!currentSeason) {
-      Alert.alert('Error', 'No active season to share');
-      return;
-    }
-
-    try {
-      // Capture the counting rounds table as an image
-      const uri = await captureRef(countingRoundsRef, {
-        format: 'png',
-        quality: 1,
-        result: 'tmpfile',
-      });
-
-      // Share the image
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'image/png',
-          dialogTitle: 'Share Counting Rounds',
-        });
-      } else {
-        Alert.alert('Error', 'Sharing is not available on this device');
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to share counting rounds');
-      console.error(error);
-    }
-  };
 
   const handleScoreClick = (weekKey, playerId, currentScore) => {
     setEditingScore({ weekKey, playerId, currentScore });
@@ -440,9 +397,8 @@ export default function OverviewScreen({ navigation }) {
 
   const handleWeekClick = (weekKey) => {
     const parts = weekKey.split('_');
-    const weekNum = parseInt(parts[1]);
-    const roundNum = parts[2] ? parseInt(parts[2]) : 1;
-
+    const weekNum = parseInt(parts[2]);
+    const roundNum = parts[3] ? parseInt(parts[3]) : 1;
     setDeletingWeek({ weekKey, weekNum, roundNum });
   };
 
@@ -459,21 +415,12 @@ export default function OverviewScreen({ navigation }) {
     <View style={styles.container}>
       <Tab.Navigator
         screenOptions={{
-          tabBarStyle: {
-            backgroundColor: theme.colors.surface,
-          },
+          tabBarStyle: { backgroundColor: theme.colors.surface },
           tabBarActiveTintColor: theme.colors.primary,
           tabBarInactiveTintColor: theme.colors.textSecondary,
-          tabBarIndicatorStyle: {
-            backgroundColor: theme.colors.primary,
-          },
-          tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: 'bold',
-          },
-          sceneContainerStyle: {
-            backgroundColor: theme.colors.background,
-          },
+          tabBarIndicatorStyle: { backgroundColor: theme.colors.primary },
+          tabBarLabelStyle: { fontSize: 11, fontWeight: 'bold' },
+          sceneContainerStyle: { backgroundColor: theme.colors.background },
         }}
       >
         <Tab.Screen name="COUNTING ROUNDS">
@@ -483,6 +430,7 @@ export default function OverviewScreen({ navigation }) {
               playerStats={playerStats}
               columnWidth={columnWidth}
               overallBestRound={overallBestRound}
+              bestRoundHolderInfo={bestRoundHolderInfo}
             />
           )}
         </Tab.Screen>
@@ -493,6 +441,7 @@ export default function OverviewScreen({ navigation }) {
               columnWidth={columnWidth}
               weekKeysWithScores={weekKeysWithScores}
               overallBestRound={overallBestRound}
+              bestRoundHolderInfo={bestRoundHolderInfo}
               handleScoreClick={handleScoreClick}
               handleWeekClick={handleWeekClick}
             />
@@ -605,6 +554,8 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.xl,
     color: theme.colors.textSecondary,
   },
+
+  // ── Season table (shared) ───────────────────────────────────────────────────
   tabContentContainer: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -622,10 +573,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: theme.borderRadius.md,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
@@ -644,19 +592,10 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 0,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
-  },
-  tableTitle: {
-    fontSize: theme.fontSize.md,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.sm,
   },
   tableRow: {
     flexDirection: 'row',
@@ -670,9 +609,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomWidth: 0.5,
     borderBottomColor: theme.colors.border,
-    borderLeftWidth: 0,
-    borderRightWidth: 0,
-    borderTopWidth: 0,
   },
   headerCell: {
     backgroundColor: '#1a1a1a',
@@ -707,8 +643,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: 'transparent',
   },
-  averageRow: {
-  },
+  averageRow: {},
   averageCell: {
     backgroundColor: theme.colors.surface,
   },
@@ -718,8 +653,7 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     textAlign: 'center',
   },
-  stdDevRow: {
-  },
+  stdDevRow: {},
   stdDevCell: {
     backgroundColor: theme.colors.surface,
   },
@@ -742,6 +676,8 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     textAlign: 'center',
   },
+
+  // ── Modals ──────────────────────────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',

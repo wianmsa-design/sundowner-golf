@@ -13,7 +13,7 @@ import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { AppContext } from '../contexts/AppContext';
 import { theme } from '../utils/theme';
-import { calculateTop8Scores, calculateAverage, calculateStandardDeviation } from '../utils/helpers';
+import { calculateTop8Scores, calculateAverage, calculateStandardDeviation, getSeasonScores, getPreviousSeason } from '../utils/helpers';
 
 // Format start date as "9 June"
 const formatStartDate = (dateString) => {
@@ -33,26 +33,31 @@ export default function AwardsScreen({ navigation }) {
 
     const activePlayers = players.filter((p) => p.active);
 
+    // Filter scores to only include current season
+    const seasonScores = getSeasonScores(scores, currentSeason);
+    const previousSeason = getPreviousSeason(historicalSeasons, currentSeason);
+
     // Calculate stats for each player (using same approach as OverviewScreen)
     const playerStats = activePlayers.map((player) => {
       // Sort week keys chronologically to ensure consecutive rounds are in order
-      const sortedWeekKeys = Object.keys(scores).sort((a, b) => {
+      const sortedWeekKeys = Object.keys(seasonScores).sort((a, b) => {
         const aParts = a.split('_');
         const bParts = b.split('_');
-        const aWeek = parseInt(aParts[1]);
-        const bWeek = parseInt(bParts[1]);
+        // New format: "2025-2_week_1" -> ["2025-2", "week", "1"]
+        const aWeek = parseInt(aParts[2]);
+        const bWeek = parseInt(bParts[2]);
 
         if (aWeek !== bWeek) return aWeek - bWeek;
 
-        const aRound = aParts[2] ? parseInt(aParts[2]) : 1;
-        const bRound = bParts[2] ? parseInt(bParts[2]) : 1;
+        const aRound = aParts[3] ? parseInt(aParts[3]) : 1;
+        const bRound = bParts[3] ? parseInt(bParts[3]) : 1;
         return aRound - bRound;
       });
 
       const playerScores = [];
       sortedWeekKeys.forEach((weekKey) => {
-        const weekData = scores[weekKey];
-        if (weekData[player.id]) {
+        const weekData = seasonScores[weekKey];
+        if (weekData[player.id] && weekData[player.id].score > 0) {
           playerScores.push({
             score: weekData[player.id].score,
             isDouble: weekData[player.id].isDouble || false,
@@ -75,6 +80,15 @@ export default function AwardsScreen({ navigation }) {
         ? parseFloat(calculateStandardDeviation(actualScores))
         : 999;
 
+      // Full-precision SD for tie-breaking (calculateStandardDeviation rounds to 1dp)
+      const stdDevRaw = (() => {
+        if (actualScores.length === 0) return 999;
+        const sum = actualScores.reduce((acc, s) => acc + s.score, 0);
+        const mean = sum / actualScores.length;
+        const variance = actualScores.reduce((acc, s) => acc + Math.pow(s.score - mean, 2), 0) / actualScores.length;
+        return Math.sqrt(variance);
+      })();
+
       const bestRound = playerScores.length > 0 ? Math.max(...playerScores.map(s => s.score)) : 0;
       const roundsPlayed = playerScores.length;
 
@@ -82,34 +96,19 @@ export default function AwardsScreen({ navigation }) {
       // Compare current season "All Rounds" average to previous season "All Rounds" average
       // Uses the same calculation as the Season Stats screen
       let seasonImprovement = null;
-      if (historicalSeasons.length > 0 && actualScores.length > 0) {
-        // Find most recent historical season
-        const sortedHistoricalSeasons = [...historicalSeasons].sort((a, b) => {
-          if (b.year !== a.year) return b.year - a.year;
-          return b.season - a.season;
+      if (previousSeason && actualScores.length >= 8) {
+        const previousRaw = [];
+        Object.values(previousSeason.scores || {}).forEach((weekScores) => {
+          const scoreData = weekScores && weekScores[player.id];
+          if (scoreData && scoreData.score > 0) {
+            // Historical seasons store double rounds doubled; halve back to the actual score
+            previousRaw.push(scoreData.isDouble ? scoreData.score / 2 : scoreData.score);
+          }
         });
-        const mostRecentSeason = sortedHistoricalSeasons[0];
 
-        // Get player's scores from previous season (normalize double rounds for average calc)
-        const previousSeasonScores = [];
-        if (mostRecentSeason.scores) {
-          Object.values(mostRecentSeason.scores).forEach((weekScores) => {
-            if (weekScores[player.id]) {
-              const scoreData = weekScores[player.id];
-              // Historical seasons store doubled values, so halve them for actual score
-              const actualScore = scoreData.isDouble ? scoreData.score / 2 : scoreData.score;
-              previousSeasonScores.push({
-                score: actualScore,
-                isDouble: false,
-              });
-            }
-          });
-        }
-
-        // Compare averages (both using actual scores, not doubled)
-        if (previousSeasonScores.length > 0) {
-          const previousAverage = parseFloat(calculateAverage(previousSeasonScores));
-          const currentAverage = average; // Already calculated above from actualScores
+        if (previousRaw.length >= 8) {
+          const previousAverage = previousRaw.reduce((a, b) => a + b, 0) / previousRaw.length;
+          const currentAverage = actualScores.reduce((a, s) => a + s.score, 0) / actualScores.length;
           seasonImprovement = currentAverage - previousAverage;
         }
       }
@@ -142,6 +141,7 @@ export default function AwardsScreen({ navigation }) {
         hotStreak,
         hotStreakScores,
         bestDoubleScore,
+        stdDevRaw,
       };
     });
 
@@ -166,8 +166,8 @@ export default function AwardsScreen({ navigation }) {
 
     // Calculate awards (all return arrays of tied players)
     const bestAverage = getTiedPlayers(qualifiedPlayers, p => p.average, true);
-    const mostConsistent = getTiedPlayers(qualifiedPlayers, p => p.stdDev, false);
-    const leastConsistent = getTiedPlayers(qualifiedPlayers, p => p.stdDev, true);
+    const mostConsistent = getTiedPlayers(qualifiedPlayers, p => p.stdDevRaw, false);
+    const leastConsistent = getTiedPlayers(qualifiedPlayers, p => p.stdDevRaw, true);
 
     // Clutch Player - considers ALL players (not just qualified), only those who played double rounds
     const allPlayersWithDoubleScores = playerStats.filter(p => p.bestDoubleScore > 0);
@@ -177,13 +177,10 @@ export default function AwardsScreen({ navigation }) {
 
     const hotStreak = getTiedPlayers(qualifiedPlayers, p => p.hotStreak, true);
 
-    // Hard Worker and Slacker - compare current season to previous season
+    // Hard Worker - compare current season to previous season
     const playersWithSeasonImprovement = qualifiedPlayers.filter(p => p.seasonImprovement !== null);
     const mostImproved = playersWithSeasonImprovement.length > 0
       ? getTiedPlayers(playersWithSeasonImprovement, p => p.seasonImprovement, true)
-      : [];
-    const mostDeclined = playersWithSeasonImprovement.length > 0
-      ? getTiedPlayers(playersWithSeasonImprovement, p => p.seasonImprovement, false)
       : [];
 
     const golfAddict = getTiedPlayers(qualifiedPlayers, p => p.roundsPlayed, true);
@@ -195,42 +192,9 @@ export default function AwardsScreen({ navigation }) {
       bestFinisher,
       hotStreak,
       mostImproved,
-      mostDeclined,
       golfAddict,
     };
   }, [currentSeason, players, scores, historicalSeasons]);
-
-  useEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          style={styles.headerShareButton}
-          onPress={handleShare}
-        >
-          <MaterialIcons name="share" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation]);
-
-  if (!currentSeason) {
-    return (
-      <View style={styles.emptyContainer}>
-        <MaterialIcons name="emoji-events" size={64} color={theme.colors.textSecondary} />
-        <Text style={styles.emptyText}>No active season</Text>
-      </View>
-    );
-  }
-
-  if (!awards) {
-    return (
-      <View style={styles.emptyContainer}>
-        <MaterialIcons name="emoji-events" size={64} color={theme.colors.textSecondary} />
-        <Text style={styles.emptyText}>No scores yet</Text>
-        <Text style={styles.emptySubText}>Awards will appear once scores are entered</Text>
-      </View>
-    );
-  }
 
   const handleShare = async () => {
     if (!currentSeason) {
@@ -260,6 +224,38 @@ export default function AwardsScreen({ navigation }) {
       console.error(error);
     }
   };
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          style={styles.headerShareButton}
+          onPress={handleShare}
+        >
+          <MaterialIcons name="share" size={24} color={theme.colors.text} />
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, handleShare]);
+
+  if (!currentSeason) {
+    return (
+      <View style={styles.emptyContainer}>
+        <MaterialIcons name="emoji-events" size={64} color={theme.colors.textSecondary} />
+        <Text style={styles.emptyText}>No active season</Text>
+      </View>
+    );
+  }
+
+  if (!awards) {
+    return (
+      <View style={styles.emptyContainer}>
+        <MaterialIcons name="emoji-events" size={64} color={theme.colors.textSecondary} />
+        <Text style={styles.emptyText}>No scores yet</Text>
+        <Text style={styles.emptySubText}>Awards will appear once scores are entered</Text>
+      </View>
+    );
+  }
 
   const AwardCard = ({ icon, iconColor, title, winners, value, description }) => {
     // winners is now an array of winner objects
@@ -342,7 +338,7 @@ export default function AwardsScreen({ navigation }) {
             iconColor="#FF5722"
             title="Hot Streak"
             winners={awards.hotStreak}
-            value={awards.hotStreak && awards.hotStreak.length > 0 ? `${awards.hotStreak[0].hotStreakScores.join(', ')}` : '-'}
+            value={awards.hotStreak && awards.hotStreak.length > 0 ? `Total: ${awards.hotStreak[0].hotStreakScores.reduce((a, b) => a + b, 0)} | Avg: ${awards.hotStreak[0].hotStreak.toFixed(1)}` : '-'}
             description="Best 3 consecutive rounds"
           />
 
@@ -356,20 +352,11 @@ export default function AwardsScreen({ navigation }) {
           />
 
           <AwardCard
-            icon="trending-down"
-            iconColor="#E53935"
-            title="Slacker"
-            winners={awards.mostDeclined}
-            value={awards.mostDeclined && awards.mostDeclined.length > 0 ? `${awards.mostDeclined[0].seasonImprovement.toFixed(2)}` : '-'}
-            description="Biggest decline from last season"
-          />
-
-          <AwardCard
             icon="smart-toy"
             iconColor="#2196F3"
             title="Mr. Consistent"
             winners={awards.mostConsistent}
-            value={awards.mostConsistent && awards.mostConsistent.length > 0 ? `SD: ${awards.mostConsistent[0].stdDev.toFixed(2)}` : '-'}
+            value={awards.mostConsistent && awards.mostConsistent.length > 0 ? `SD: ${awards.mostConsistent[0].stdDevRaw.toFixed(1)}` : '-'}
             description="Most consistent player"
           />
 
@@ -378,7 +365,7 @@ export default function AwardsScreen({ navigation }) {
             iconColor="#00BCD4"
             title="Wild Card"
             winners={awards.leastConsistent}
-            value={awards.leastConsistent && awards.leastConsistent.length > 0 ? `SD: ${awards.leastConsistent[0].stdDev.toFixed(2)}` : '-'}
+            value={awards.leastConsistent && awards.leastConsistent.length > 0 ? `SD: ${awards.leastConsistent[0].stdDevRaw.toFixed(1)}` : '-'}
             description="Least consistent player"
           />
 

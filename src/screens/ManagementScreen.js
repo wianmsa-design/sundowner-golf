@@ -21,7 +21,7 @@ import * as Sharing from 'expo-sharing';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { AppContext } from '../contexts/AppContext';
 import { theme } from '../utils/theme';
-import { getNextSeasonInfo } from '../utils/helpers';
+import { getNextSeasonInfo, calculateTop8Scores, calculateAverage, computeLifetimeStatsFromHistory, compareStandings } from '../utils/helpers';
 
 const Tab = createMaterialTopTabNavigator();
 
@@ -29,18 +29,24 @@ export default function ManagementScreen() {
   const {
     currentSeason,
     setCurrentSeason,
+    activeSeasons,
+    setActiveSeasons,
+    selectedSeasonId,
+    setSelectedSeasonId,
     players,
     setPlayers,
     scores,
     setScores,
     historicalSeasons,
     setHistoricalSeasons,
+    setStoredLifetimeStats,
   } = useContext(AppContext);
 
   const [addPlayerModal, setAddPlayerModal] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
   const [newPlayerShortName, setNewPlayerShortName] = useState('');
   const [startSeasonModal, setStartSeasonModal] = useState(false);
+  const [archiveSeasonModal, setArchiveSeasonModal] = useState(false);
   const [newSeasonYear, setNewSeasonYear] = useState('');
   const [newSeasonNumber, setNewSeasonNumber] = useState('1');
   const [newSeasonStartDate, setNewSeasonStartDate] = useState(new Date());
@@ -84,6 +90,24 @@ export default function ManagementScreen() {
     );
   };
 
+  const handleRecalculateLifetimeStats = () => {
+    Alert.alert(
+      'Recalculate Lifetime Stats',
+      'Reprocess all historical seasons to recompute lifetime statistics. Run this once after first install or after restoring a backup.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Recalculate',
+          onPress: () => {
+            const migrated = computeLifetimeStatsFromHistory(historicalSeasons);
+            setStoredLifetimeStats(migrated);
+            Alert.alert('Done', 'Lifetime stats recalculated from all historical seasons.');
+          },
+        },
+      ]
+    );
+  };
+
   const openStartSeasonModal = () => {
     const nextSeason = getNextSeasonInfo(currentSeason);
     setNewSeasonYear(nextSeason.year.toString());
@@ -115,24 +139,17 @@ export default function ManagementScreen() {
       return;
     }
 
-    if (currentSeason) {
-      const archivedSeason = {
-        ...currentSeason,
-        scores: { ...scores },
-        archived: true,
-      };
-      setHistoricalSeasons([...historicalSeasons, archivedSeason]);
-    }
-
     const newSeason = {
+      id: Date.now().toString(),
       year,
       season,
       startDate,
       weeks: [],
     };
 
-    setCurrentSeason(newSeason);
-    setScores({});
+    // Add new season to active seasons (no auto-archiving)
+    setActiveSeasons([...activeSeasons, newSeason]);
+    setSelectedSeasonId(newSeason.id);
     setStartSeasonModal(false);
 
     Alert.alert('Success', `Season ${year} - Season ${season} started!`);
@@ -153,9 +170,129 @@ export default function ManagementScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            setCurrentSeason(null);
-            setScores({});
+            // Remove the season from active seasons
+            const updatedActiveSeasons = activeSeasons.filter(s => s.id !== currentSeason.id);
+            setActiveSeasons(updatedActiveSeasons);
+
+            // Set selected season to first remaining active season, or null
+            if (updatedActiveSeasons.length > 0) {
+              setSelectedSeasonId(updatedActiveSeasons[0].id);
+            } else {
+              setSelectedSeasonId(null);
+            }
+
             Alert.alert('Success', 'Season deleted');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleArchiveSeason = (seasonId) => {
+    const seasonToArchive = activeSeasons.find(s => s.id === seasonId);
+    if (!seasonToArchive) return;
+
+    Alert.alert(
+      'Confirm Archive',
+      `Archive ${seasonToArchive.year} - Season ${seasonToArchive.season}? This season will be moved to historical seasons.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Archive',
+          onPress: () => {
+            // Get scores for this season and double the isDouble scores for archiving
+            const seasonKey = `${seasonToArchive.year}-${seasonToArchive.season}`;
+            const seasonScores = {};
+            Object.keys(scores).forEach(key => {
+              if (key.startsWith(seasonKey + '_')) {
+                const weekScores = scores[key];
+                const transformedWeekScores = {};
+
+                // Transform each player's score
+                Object.keys(weekScores).forEach(playerId => {
+                  const scoreData = weekScores[playerId];
+                  transformedWeekScores[playerId] = {
+                    ...scoreData,
+                    // Historical seasons store doubled values for double rounds
+                    score: scoreData.isDouble ? scoreData.score * 2 : scoreData.score
+                  };
+                });
+
+                seasonScores[key] = transformedWeekScores;
+              }
+            });
+
+            // Calculate pre-calculated leaderboard from current season data
+            const activePlayers = players.filter(p => p.active);
+            const preCalculatedLeaderboard = activePlayers.map(player => {
+              const playerScores = [];
+
+              // Get all scores for this player from the current (non-doubled) scores
+              Object.keys(scores).forEach(key => {
+                if (key.startsWith(seasonKey + '_')) {
+                  const weekData = scores[key];
+                  if (weekData[player.id] && weekData[player.id].score > 0) {
+                    playerScores.push({
+                      score: weekData[player.id].score,
+                      isDouble: weekData[player.id].isDouble || false,
+                    });
+                  }
+                }
+              });
+
+              // Calculate top 8 using the helper function (handles doubling for double rounds)
+              const top8 = calculateTop8Scores(playerScores);
+              const top8Average = top8.length >= 8
+                ? calculateAverage(top8)
+                : 'N/A';
+
+              const overallAverage = playerScores.length > 0
+                ? playerScores.reduce((sum, s) => sum + s.score, 0) / playerScores.length
+                : 0;
+
+              return {
+                playerId: player.id,
+                name: player.name,
+                roundsPlayed: playerScores.length,
+                average: top8Average,
+                overallAverage,
+              };
+            })
+            .filter(p => p.roundsPlayed > 0) // Only include players who played
+            .sort((a, b) => compareStandings(
+              { top8Avg: a.average === 'N/A' ? -1 : parseFloat(a.average), overallAvg: a.overallAverage },
+              { top8Avg: b.average === 'N/A' ? -1 : parseFloat(b.average), overallAvg: b.overallAverage },
+            ));
+
+            // Create archived season
+            const archivedSeason = {
+              ...seasonToArchive,
+              scores: seasonScores,
+              preCalculatedLeaderboard,
+              countRounds: 8,
+              archived: true,
+            };
+
+            setStoredLifetimeStats(computeLifetimeStatsFromHistory([...historicalSeasons, archivedSeason]));
+
+            // Add to historical seasons
+            setHistoricalSeasons([...historicalSeasons, archivedSeason]);
+
+            // Remove from active seasons
+            const updatedActiveSeasons = activeSeasons.filter(s => s.id !== seasonId);
+            setActiveSeasons(updatedActiveSeasons);
+
+            // Update selected season if needed
+            if (selectedSeasonId === seasonId) {
+              if (updatedActiveSeasons.length > 0) {
+                setSelectedSeasonId(updatedActiveSeasons[0].id);
+              } else {
+                setSelectedSeasonId(null);
+              }
+            }
+
+            setArchiveSeasonModal(false);
+            Alert.alert('Success', 'Season archived');
           },
         },
       ]
@@ -166,12 +303,13 @@ export default function ManagementScreen() {
     try {
       // Prepare backup data
       const backupData = {
-        currentSeason,
+        activeSeasons,
+        selectedSeasonId,
         players,
         scores,
         historicalSeasons,
         exportDate: new Date().toISOString(),
-        version: '1.0.0',
+        version: '2.0.0',
       };
 
       // Create filename with current date
@@ -255,11 +393,30 @@ export default function ManagementScreen() {
             text: 'Restore',
             style: 'destructive',
             onPress: () => {
-              // Restore data
-              if (backupData.currentSeason) setCurrentSeason(backupData.currentSeason);
+              // Restore data - handle both old and new formats
+              if (backupData.activeSeasons) {
+                setActiveSeasons(backupData.activeSeasons);
+                if (backupData.selectedSeasonId) {
+                  setSelectedSeasonId(backupData.selectedSeasonId);
+                }
+              } else if (backupData.currentSeason) {
+                // Backward compatibility: migrate old format
+                const migratedSeason = {
+                  ...backupData.currentSeason,
+                  id: backupData.currentSeason.id || Date.now().toString(),
+                };
+                setActiveSeasons([migratedSeason]);
+                setSelectedSeasonId(migratedSeason.id);
+              }
+
               if (backupData.players) setPlayers(backupData.players);
               if (backupData.scores) setScores(backupData.scores);
-              if (backupData.historicalSeasons) setHistoricalSeasons(backupData.historicalSeasons);
+              const restoredHistory = backupData.historicalSeasons || [];
+              if (backupData.historicalSeasons) setHistoricalSeasons(restoredHistory);
+
+              // Recompute lifetime stats from the imported historical data
+              const migrated = computeLifetimeStatsFromHistory(restoredHistory);
+              setStoredLifetimeStats(migrated);
 
               Alert.alert('Success', 'Data restored successfully');
             },
@@ -281,14 +438,39 @@ export default function ManagementScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Competition Management</Text>
 
-        {currentSeason ? (
-          <View style={styles.currentSeasonInfo}>
-            <Text style={styles.currentSeasonText}>
-              Current: {currentSeason.year} - Season {currentSeason.season}
-            </Text>
-          </View>
+        {activeSeasons.length > 0 ? (
+          <>
+            <Text style={styles.inputLabel}>Active Season</Text>
+            <View style={styles.pickerContainer}>
+              <Picker
+                selectedValue={selectedSeasonId}
+                onValueChange={(value) => setSelectedSeasonId(value)}
+                style={styles.picker}
+                dropdownIconColor={theme.colors.text}
+              >
+                {activeSeasons.map((season) => (
+                  <Picker.Item
+                    key={season.id}
+                    label={`${season.year} - Season ${season.season}`}
+                    value={season.id}
+                  />
+                ))}
+              </Picker>
+            </View>
+
+            {currentSeason && (
+              <View style={styles.currentSeasonInfo}>
+                <Text style={styles.currentSeasonText}>
+                  Selected: {currentSeason.year} - Season {currentSeason.season}
+                </Text>
+                <Text style={styles.currentSeasonText}>
+                  Start Date: {currentSeason.startDate}
+                </Text>
+              </View>
+            )}
+          </>
         ) : (
-          <Text style={styles.emptyText}>No active season</Text>
+          <Text style={styles.emptyText}>No active seasons</Text>
         )}
 
         <TouchableOpacity
@@ -299,14 +481,24 @@ export default function ManagementScreen() {
           <Text style={styles.addButtonText}>Start New Season</Text>
         </TouchableOpacity>
 
-        {currentSeason && (
-          <TouchableOpacity
-            style={[styles.addButton, styles.deleteSeasonButton]}
-            onPress={handleDeleteSeason}
-          >
-            <MaterialIcons name="delete" size={20} color={theme.colors.text} />
-            <Text style={styles.addButtonText}>Delete Season</Text>
-          </TouchableOpacity>
+        {activeSeasons.length > 0 && (
+          <>
+            <TouchableOpacity
+              style={[styles.addButton, styles.archiveButton]}
+              onPress={() => setArchiveSeasonModal(true)}
+            >
+              <MaterialIcons name="archive" size={20} color={theme.colors.text} />
+              <Text style={styles.addButtonText}>Archive Season</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.addButton, styles.deleteSeasonButton]}
+              onPress={handleDeleteSeason}
+            >
+              <MaterialIcons name="delete" size={20} color={theme.colors.text} />
+              <Text style={styles.addButtonText}>Delete Season</Text>
+            </TouchableOpacity>
+          </>
         )}
       </View>
 
@@ -328,6 +520,14 @@ export default function ManagementScreen() {
         >
           <MaterialIcons name="download" size={20} color={theme.colors.text} />
           <Text style={styles.addButtonText}>Import Data</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.addButton, { backgroundColor: '#5C6BC0' }]}
+          onPress={handleRecalculateLifetimeStats}
+        >
+          <MaterialIcons name="refresh" size={20} color={theme.colors.text} />
+          <Text style={styles.addButtonText}>Recalculate Lifetime Stats</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -617,6 +817,46 @@ export default function ManagementScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Archive Season Modal */}
+      <Modal
+        visible={archiveSeasonModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setArchiveSeasonModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Archive Season</Text>
+            <Text style={styles.emptyText}>
+              Select a season to archive:
+            </Text>
+
+            <ScrollView style={styles.seasonList}>
+              {activeSeasons.map((season) => (
+                <TouchableOpacity
+                  key={season.id}
+                  style={styles.seasonItem}
+                  onPress={() => handleArchiveSeason(season.id)}
+                >
+                  <MaterialIcons name="archive" size={24} color={theme.colors.primary} />
+                  <Text style={styles.seasonItemText}>
+                    {season.year} - Season {season.season}
+                  </Text>
+                  <MaterialIcons name="chevron-right" size={24} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton, { marginTop: theme.spacing.md }]}
+              onPress={() => setArchiveSeasonModal(false)}
+            >
+              <Text style={styles.modalButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -740,6 +980,9 @@ const styles = StyleSheet.create({
   deleteSeasonButton: {
     backgroundColor: theme.colors.accent,
   },
+  archiveButton: {
+    backgroundColor: '#FF9800',
+  },
   currentSeasonInfo: {
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -748,6 +991,24 @@ const styles = StyleSheet.create({
   },
   currentSeasonText: {
     fontSize: theme.fontSize.sm,
+    color: theme.colors.text,
+  },
+  seasonList: {
+    maxHeight: 300,
+    marginVertical: theme.spacing.md,
+  },
+  seasonItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.background,
+    borderRadius: theme.borderRadius.md,
+    marginBottom: theme.spacing.sm,
+    gap: theme.spacing.sm,
+  },
+  seasonItemText: {
+    flex: 1,
+    fontSize: theme.fontSize.md,
     color: theme.colors.text,
   },
   modalOverlay: {

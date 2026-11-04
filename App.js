@@ -14,6 +14,7 @@ import AwardsScreen from './src/screens/AwardsScreen';
 import OverviewScreen from './src/screens/OverviewScreen';
 import ManagementScreen from './src/screens/ManagementScreen';
 import HistoricalScoresScreen from './src/screens/HistoricalScoresScreen';
+import LifetimeStatsScreen from './src/screens/LifetimeStatsScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -84,9 +85,19 @@ export default function App() {
             name="Overview"
             component={OverviewScreen}
             options={{
-              title: 'Season Stats',
+              title: 'Player Stats',
               tabBarIcon: ({ color, size }) => (
                 <MaterialIcons name="analytics" size={size} color={color} />
+              ),
+            }}
+          />
+          <Tab.Screen
+            name="LifetimeStats"
+            component={LifetimeStatsScreen}
+            options={{
+              title: 'Lifetime Stats',
+              tabBarIcon: ({ color, size }) => (
+                <MaterialIcons name="insights" size={size} color={color} />
               ),
             }}
           />

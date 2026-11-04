@@ -15,6 +15,8 @@ import {
   getWeekDateRange,
   formatDateRange,
   getCurrentWeekNumber,
+  getScoreKey,
+  getSeasonScores,
 } from '../utils/helpers';
 
 export default function ScoreEntryScreen({ navigation, route }) {
@@ -40,7 +42,7 @@ export default function ScoreEntryScreen({ navigation, route }) {
       let roundCount = 0;
       Object.keys(historicalScores).forEach((weekKey) => {
         const weekData = historicalScores[weekKey];
-        if (weekData[player.id]) {
+        if (weekData[player.id] && weekData[player.id].score > 0) {
           roundCount++;
         }
       });
@@ -77,7 +79,7 @@ export default function ScoreEntryScreen({ navigation, route }) {
   const handleAddRound = () => {
     // Find next round number for current week
     let nextRound = currentRound === 1 ? 2 : currentRound + 1;
-    while (scores[`week_${currentWeek}_${nextRound}`]) {
+    while (scores[getScoreKey(currentSeason, currentWeek, nextRound)]) {
       nextRound++;
     }
     setCurrentRound(nextRound);
@@ -119,7 +121,7 @@ export default function ScoreEntryScreen({ navigation, route }) {
   }, [navigation, currentWeek, currentRound, currentSeason, scores]);
 
   const loadWeekScores = (week, round = 1) => {
-    const weekKey = round === 1 ? `week_${week}` : `week_${week}_${round}`;
+    const weekKey = getScoreKey(currentSeason, week, round);
     const existingScores = scores[weekKey] || {};
     setWeekScores(existingScores);
 
@@ -203,8 +205,11 @@ export default function ScoreEntryScreen({ navigation, route }) {
   };
 
   const saveAndAdvance = () => {
-    const weekKey = currentRound === 1 ? `week_${currentWeek}` : `week_${currentWeek}_${currentRound}`;
-    const updatedScores = { ...scores, [weekKey]: weekScores };
+    const weekKey = getScoreKey(currentSeason, currentWeek, currentRound);
+    const filteredScores = Object.fromEntries(
+      Object.entries(weekScores).filter(([, s]) => s.score > 0)
+    );
+    const updatedScores = { ...scores, [weekKey]: filteredScores };
     setScores(updatedScores);
 
     // Advance to next week
@@ -216,8 +221,11 @@ export default function ScoreEntryScreen({ navigation, route }) {
   };
 
   const handleUpdate = () => {
-    const weekKey = currentRound === 1 ? `week_${currentWeek}` : `week_${currentWeek}_${currentRound}`;
-    const updatedScores = { ...scores, [weekKey]: weekScores };
+    const weekKey = getScoreKey(currentSeason, currentWeek, currentRound);
+    const filteredScores = Object.fromEntries(
+      Object.entries(weekScores).filter(([, s]) => s.score > 0)
+    );
+    const updatedScores = { ...scores, [weekKey]: filteredScores };
     setScores(updatedScores);
 
     // Advance to next week
@@ -237,7 +245,7 @@ export default function ScoreEntryScreen({ navigation, route }) {
     } else if (currentWeek > 1) {
       // Check if previous week has multiple rounds
       let checkRound = 2;
-      while (scores[`week_${currentWeek - 1}_${checkRound}`]) {
+      while (scores[getScoreKey(currentSeason, currentWeek - 1, checkRound)]) {
         checkRound++;
       }
       const lastRound = checkRound - 1;
@@ -250,7 +258,7 @@ export default function ScoreEntryScreen({ navigation, route }) {
 
   const handleSwipeRight = () => {
     // Check if there's a next round for current week
-    const nextRoundKey = `week_${currentWeek}_${currentRound + 1}`;
+    const nextRoundKey = getScoreKey(currentSeason, currentWeek, currentRound + 1);
     if (scores[nextRoundKey] && Object.keys(scores[nextRoundKey]).length > 0) {
       const newRound = currentRound + 1;
       setCurrentRound(newRound);

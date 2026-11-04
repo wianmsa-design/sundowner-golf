@@ -170,3 +170,201 @@ export const calculateLifetimeStandardDeviation = (scores) => {
   // Return the standard deviation (square root of variance)
   return Math.sqrt(variance).toFixed(1);
 };
+
+// Season-scoped score key helpers
+export const getSeasonKey = (season) => {
+  if (!season) return null;
+  return `${season.year}-${season.season}`;
+};
+
+export const getScoreKey = (season, week, round = 1) => {
+  const seasonKey = getSeasonKey(season);
+  if (!seasonKey) return null;
+  return round === 1 ? `${seasonKey}_week_${week}` : `${seasonKey}_week_${week}_${round}`;
+};
+
+export const getSeasonScores = (allScores, season) => {
+  if (!allScores || !season) return {};
+  const seasonKey = getSeasonKey(season);
+  const seasonScores = {};
+
+  Object.keys(allScores).forEach((key) => {
+    if (key.startsWith(seasonKey + '_')) {
+      seasonScores[key] = allScores[key];
+    }
+  });
+
+  return seasonScores;
+};
+
+// Ranks by top-N average; a tie on it is broken by the overall season average (actual scores, all rounds)
+export const compareStandings = (a, b) =>
+  (b.top8Avg - a.top8Avg) || ((b.overallAvg || 0) - (a.overallAvg || 0));
+
+// Picks 1st and 2nd from standings sorted with compareStandings.
+// The overall-average tiebreak settles both places; 2nd is only withheld if still tied on both averages.
+export const pickSeasonPlaces = (ranked) => {
+  const winnerId = ranked[0]?.playerId ?? null;
+  let secondId = null;
+  if (ranked.length >= 2) {
+    const [first, second, third] = ranked;
+    const tied = (x, y) => x.top8Avg === y.top8Avg && (x.overallAvg || 0) === (y.overallAvg || 0);
+    if (!tied(second, first) && !(third && tied(second, third))) secondId = second.playerId;
+  }
+  return { winnerId, secondId };
+};
+
+// Archived season immediately before `season` (by year, then season number)
+export const getPreviousSeason = (historicalSeasons, season) => {
+  if (!season) return null;
+  const order = (s) => Number(s.year) * 100 + Number(s.season);
+  const target = order(season);
+  return (historicalSeasons || [])
+    .filter((s) => order(s) < target)
+    .sort((a, b) => order(b) - order(a))[0] || null;
+};
+
+// Process all historical seasons into per-player lifetime stats.
+// Historical seasons store isDouble rounds as score*2; we halve back to raw.
+// Winner/2nd come from the saved leaderboard, or top-N displayed scores when it's missing.
+export const computeLifetimeStatsFromHistory = (historicalSeasons) => {
+  const stats = {};
+
+  const init = (id) => {
+    if (!stats[id]) stats[id] = { wins: 0, secondPlaces: 0, scores: [], bestScore: 0 };
+  };
+
+  (historicalSeasons || []).forEach((season) => {
+    const seasonScores = season.scores || {};
+    const countRounds = season.countRounds || 8;
+
+    // Gather all player IDs present in this season (including deleted players)
+    const allPlayerIds = new Set();
+    Object.values(seasonScores).forEach((weekData) => {
+      Object.keys(weekData).forEach((pid) => allPlayerIds.add(pid));
+    });
+
+    // Collect raw (for stats) and display (for ranking) scores per player
+    const rawScores = {};
+    const displayScores = {};
+    allPlayerIds.forEach((pid) => {
+      rawScores[pid] = [];
+      displayScores[pid] = [];
+      Object.values(seasonScores).forEach((weekData) => {
+        const sd = weekData[pid];
+        if (sd && sd.score > 0) {
+          rawScores[pid].push(sd.isDouble ? sd.score / 2 : sd.score);
+          displayScores[pid].push(sd.score); // already doubled in historical storage
+        }
+      });
+    });
+
+    const overallAvg = (pid) => {
+      const r = rawScores[pid] || [];
+      return r.length > 0 ? r.reduce((a, b) => a + b, 0) / r.length : 0;
+    };
+
+    // The saved leaderboard is the official result; only re-rank when it's missing
+    let ranked = [];
+    const savedLeaderboard = season.preCalculatedLeaderboard || [];
+    if (savedLeaderboard.length > 0) {
+      ranked = savedLeaderboard
+        .filter((e) => e && e.playerId != null && e.average != null && e.average !== 'N/A')
+        .map((e) => ({
+          playerId: String(e.playerId),
+          top8Avg: parseFloat(e.average),
+          overallAvg: e.overallAverage != null ? Number(e.overallAverage) : overallAvg(String(e.playerId)),
+        }))
+        .filter((e) => !Number.isNaN(e.top8Avg));
+    } else {
+      allPlayerIds.forEach((pid) => {
+        const topN = [...displayScores[pid]].sort((a, b) => b - a).slice(0, countRounds);
+        if (topN.length >= countRounds) {
+          ranked.push({ playerId: pid, top8Avg: topN.reduce((a, b) => a + b, 0) / countRounds, overallAvg: overallAvg(pid) });
+        }
+      });
+    }
+    ranked.sort(compareStandings);
+
+    const { winnerId, secondId } = pickSeasonPlaces(ranked);
+
+    allPlayerIds.forEach((pid) => {
+      init(pid);
+      rawScores[pid].forEach((s) => {
+        stats[pid].scores.push(s);
+        if (s > stats[pid].bestScore) stats[pid].bestScore = s;
+      });
+    });
+    if (winnerId) { init(winnerId); stats[winnerId].wins++; }
+    if (secondId) { init(secondId); stats[secondId].secondPlaces++; }
+  });
+
+  return stats;
+};
+
+// Stored lifetime stats (archived seasons) plus rounds from seasons still in progress
+export const mergeLifetimeWithActiveSeasons = (storedStats, allScores, activeSeasons) => {
+  const merged = {};
+  Object.entries(storedStats || {}).forEach(([pid, s]) => {
+    merged[pid] = { ...s, scores: [...(s.scores || [])] };
+  });
+
+  (activeSeasons || []).forEach((season) => {
+    Object.values(getSeasonScores(allScores, season)).forEach((weekData) => {
+      Object.entries(weekData || {}).forEach(([pid, sd]) => {
+        if (!sd || !(sd.score > 0)) return;
+        if (!merged[pid]) merged[pid] = { wins: 0, secondPlaces: 0, scores: [], bestScore: 0 };
+        merged[pid].scores.push(sd.score);
+        if (sd.score > merged[pid].bestScore) merged[pid].bestScore = sd.score;
+      });
+    });
+  });
+
+  return merged;
+};
+
+// Calculate best round holder chronologically
+// Returns the first player to achieve the highest score
+export const getBestRoundHolder = (seasonScores) => {
+  if (!seasonScores || Object.keys(seasonScores).length === 0) return null;
+
+  // Sort week keys chronologically
+  const sortedWeekKeys = Object.keys(seasonScores).sort((a, b) => {
+    const aParts = a.split('_');
+    const bParts = b.split('_');
+    // Format: "2025-2_week_1" or "2025-2_week_1_2"
+    const aWeek = parseInt(aParts[2]);
+    const bWeek = parseInt(bParts[2]);
+
+    if (aWeek !== bWeek) return aWeek - bWeek;
+
+    const aRound = aParts[3] ? parseInt(aParts[3]) : 1;
+    const bRound = bParts[3] ? parseInt(bParts[3]) : 1;
+    return aRound - bRound;
+  });
+
+  // Track first player to reach each score and the highest score seen
+  let highestScore = 0;
+  let bestRoundHolder = null;
+
+  // Iterate chronologically through all scores
+  sortedWeekKeys.forEach((weekKey) => {
+    const weekData = seasonScores[weekKey];
+
+    Object.entries(weekData).forEach(([playerId, scoreData]) => {
+      const score = scoreData.score;
+
+      // If this score beats the current highest, this player becomes the holder
+      if (score > highestScore) {
+        highestScore = score;
+        bestRoundHolder = {
+          playerId,
+          score,
+          weekKey,
+        };
+      }
+    });
+  });
+
+  return bestRoundHolder;
+};

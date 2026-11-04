@@ -13,7 +13,7 @@ import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { AppContext } from '../contexts/AppContext';
 import { theme } from '../utils/theme';
-import { calculateTop8Scores, calculateAverage, calculateTotal } from '../utils/helpers';
+import { calculateTop8Scores, calculateAverage, calculateTotal, getSeasonScores, getBestRoundHolder, computeLifetimeStatsFromHistory, compareStandings } from '../utils/helpers';
 
 // Format start date as "9 June"
 const formatStartDate = (dateString) => {
@@ -28,47 +28,10 @@ export default function LeaderboardScreen({ navigation }) {
   const { currentSeason, players, scores, historicalSeasons } = useContext(AppContext);
   const leaderboardRef = useRef();
 
-  // Calculate previous wins for each player
   const previousWins = useMemo(() => {
     const wins = {};
-    historicalSeasons.forEach((season) => {
-      // Use pre-calculated leaderboard if available
-      if (season.preCalculatedLeaderboard && season.preCalculatedLeaderboard.length > 0) {
-        const winner = season.preCalculatedLeaderboard[0];
-        if (winner) {
-          wins[winner.playerId] = (wins[winner.playerId] || 0) + 1;
-        }
-      } else {
-        // Calculate winner from scores
-        const playerScoresMap = {};
-        Object.values(season.scores || {}).forEach((weekScores) => {
-          Object.entries(weekScores).forEach(([playerId, scoreData]) => {
-            if (!playerScoresMap[playerId]) playerScoresMap[playerId] = [];
-            playerScoresMap[playerId].push({
-              score: scoreData.score,
-              isDouble: scoreData.isDouble || false,
-            });
-          });
-        });
-
-        // Find winner by top average
-        let winnerId = null;
-        let winnerAvg = 0;
-        Object.entries(playerScoresMap).forEach(([playerId, playerScores]) => {
-          const top8 = calculateTop8Scores(playerScores);
-          if (top8.length >= (season.countRounds || 8)) {
-            const avg = parseFloat(calculateAverage(top8));
-            if (avg > winnerAvg) {
-              winnerAvg = avg;
-              winnerId = playerId;
-            }
-          }
-        });
-
-        if (winnerId) {
-          wins[winnerId] = (wins[winnerId] || 0) + 1;
-        }
-      }
+    Object.entries(computeLifetimeStatsFromHistory(historicalSeasons)).forEach(([pid, s]) => {
+      if (s.wins > 0) wins[pid] = s.wins;
     });
     return wins;
   }, [historicalSeasons]);
@@ -78,12 +41,15 @@ export default function LeaderboardScreen({ navigation }) {
 
     const activePlayers = players.filter((p) => p.active);
 
+    // Filter scores to only include current season
+    const seasonScores = getSeasonScores(scores, currentSeason);
+
     const playerStats = activePlayers.map((player) => {
-      // Get all scores for this player
+      // Get all scores for this player in the current season
       const playerScores = [];
-      Object.keys(scores).forEach((weekKey) => {
-        const weekData = scores[weekKey];
-        if (weekData[player.id]) {
+      Object.keys(seasonScores).forEach((weekKey) => {
+        const weekData = seasonScores[weekKey];
+        if (weekData[player.id] && weekData[player.id].score > 0) {
           playerScores.push({
             week: weekKey,
             score: weekData[player.id].score,
@@ -110,6 +76,11 @@ export default function LeaderboardScreen({ navigation }) {
         ? parseFloat(calculateAverage(playerScores))
         : 0;
 
+      // Season average over all rounds at actual score, used to break a tie for 1st
+      const overallAverage = playerScores.length > 0
+        ? playerScores.reduce((sum, s) => sum + s.score, 0) / playerScores.length
+        : 0;
+
       return {
         player,
         roundsPlayed,
@@ -118,6 +89,7 @@ export default function LeaderboardScreen({ navigation }) {
         total,
         bestRound,
         currentAverage,
+        overallAverage,
       };
     });
 
@@ -125,13 +97,10 @@ export default function LeaderboardScreen({ navigation }) {
     const qualified = playerStats.filter((p) => p.qualified);
     const unqualified = playerStats.filter((p) => !p.qualified);
 
-    // Sort qualified by average (desc), then by total (desc)
-    qualified.sort((a, b) => {
-      if (b.average !== a.average) {
-        return b.average - a.average;
-      }
-      return b.total - a.total;
-    });
+    qualified.sort((a, b) => compareStandings(
+      { top8Avg: a.average, overallAvg: a.overallAverage },
+      { top8Avg: b.average, overallAvg: b.overallAverage },
+    ));
 
     // Sort unqualified by currentAverage
     unqualified.sort((a, b) => b.currentAverage - a.currentAverage);
@@ -143,8 +112,9 @@ export default function LeaderboardScreen({ navigation }) {
         const prev = qualified[i - 1];
         const current = qualified[i];
 
-        // Check if tied
-        if (current.average === prev.average && current.total === prev.total) {
+        // Ties for 1st and 2nd are broken by overall average; lower positions tie on the top-8 average alone
+        const tiebreakSettled = prev.rank <= 2 && current.overallAverage !== prev.overallAverage;
+        if (current.average === prev.average && !tiebreakSettled) {
           qualified[i].rank = prev.rank;
           qualified[i].isTied = true;
           qualified[i - 1].isTied = true;
@@ -158,21 +128,19 @@ export default function LeaderboardScreen({ navigation }) {
     }
 
     return [...qualified, ...unqualified];
-  }, [players, scores]);
+  }, [players, scores, currentSeason]);
 
-  // Find best round holder
+  // Find best round holder chronologically
   const bestRoundHolder = useMemo(() => {
-    if (leaderboardData.length === 0) return null;
+    const seasonScores = getSeasonScores(scores, currentSeason);
+    const holder = getBestRoundHolder(seasonScores);
 
-    let best = leaderboardData[0];
-    leaderboardData.forEach((p) => {
-      if (p.bestRound > best.bestRound) {
-        best = p;
-      }
-    });
+    if (!holder) return null;
 
-    return best.bestRound > 0 ? best : null;
-  }, [leaderboardData]);
+    // Find the player data from leaderboardData
+    const playerData = leaderboardData.find(p => p.player.id === holder.playerId);
+    return playerData || null;
+  }, [scores, currentSeason, leaderboardData]);
 
   // Calculate max icons for any single row
   const maxIconsInRow = useMemo(() => {

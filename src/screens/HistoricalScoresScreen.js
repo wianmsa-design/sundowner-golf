@@ -12,6 +12,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { AppContext } from '../contexts/AppContext';
 import { theme, getScoreColor, getContrastTextColor } from '../utils/theme';
+import { compareStandings } from '../utils/helpers';
 
 const Tab = createMaterialTopTabNavigator();
 
@@ -114,7 +115,7 @@ function AllScoresTab({ currentHistoricalSeason, fallbackPlayers }) {
 
       Object.keys(scores).forEach((weekKey) => {
         const weekData = scores[weekKey];
-        if (weekData[player.id]) {
+        if (weekData[player.id] && weekData[player.id].score > 0) {
           scoresByWeekKey[weekKey] = weekData[player.id];
           const scoreData = weekData[player.id];
           // Use actual score (half if double) for average calculation
@@ -156,13 +157,14 @@ function AllScoresTab({ currentHistoricalSeason, fallbackPlayers }) {
     return keys.sort((a, b) => {
       const aParts = a.split('_');
       const bParts = b.split('_');
-      const aWeek = parseInt(aParts[1]);
-      const bWeek = parseInt(bParts[1]);
+      // New format: "2025-2_week_1" -> ["2025-2", "week", "1"]
+      const aWeek = parseInt(aParts[2]);
+      const bWeek = parseInt(bParts[2]);
 
       if (aWeek !== bWeek) return aWeek - bWeek;
 
-      const aRound = aParts[2] ? parseInt(aParts[2]) : 1;
-      const bRound = bParts[2] ? parseInt(bParts[2]) : 1;
+      const aRound = aParts[3] ? parseInt(aParts[3]) : 1;
+      const bRound = bParts[3] ? parseInt(bParts[3]) : 1;
       return aRound - bRound;
     });
   }, [currentHistoricalSeason]);
@@ -218,8 +220,9 @@ function AllScoresTab({ currentHistoricalSeason, fallbackPlayers }) {
 
           {weekKeysWithScores.map((weekKey, index) => {
             const parts = weekKey.split('_');
-            const weekNum = parseInt(parts[1]);
-            const roundNum = parts[2] ? parseInt(parts[2]) : 1;
+            // New format: "2025-2_week_1" -> ["2025-2", "week", "1"]
+            const weekNum = parseInt(parts[2]);
+            const roundNum = parts[3] ? parseInt(parts[3]) : 1;
             const displayWeek = roundNum === 1 ? weekNum.toString() : `${weekNum}.${roundNum}`;
 
             return (
@@ -267,20 +270,38 @@ function LeaderboardTab({ currentHistoricalSeason, fallbackPlayers }) {
   const leaderboardData = useMemo(() => {
     if (!currentHistoricalSeason) return [];
 
+    const scores = currentHistoricalSeason.scores || {};
+
+    // Overall season average at actual score (doubles halved), the tiebreak for 1st
+    const overallAverageFor = (playerId) => {
+      const actual = [];
+      Object.values(scores).forEach((weekData) => {
+        const sd = weekData[playerId];
+        if (sd && sd.score > 0) actual.push(sd.isDouble ? sd.score / 2 : sd.score);
+      });
+      return actual.length > 0 ? actual.reduce((a, b) => a + b, 0) / actual.length : 0;
+    };
+    const byStanding = (a, b) => compareStandings(
+      { top8Avg: a.top8AverageNum, overallAvg: a.overallAverage },
+      { top8Avg: b.top8AverageNum, overallAvg: b.overallAverage },
+    );
+
     // If pre-calculated leaderboard exists, use it
     if (currentHistoricalSeason.preCalculatedLeaderboard) {
-      return currentHistoricalSeason.preCalculatedLeaderboard.map(item => ({
-        player: {
-          id: item.playerId,
-          name: item.name,
-        },
-        roundsPlayed: item.roundsPlayed,
-        top8Average: item.average,
-        top8AverageNum: parseFloat(item.average),
-      }));
+      return currentHistoricalSeason.preCalculatedLeaderboard
+        .map(item => ({
+          player: {
+            id: item.playerId,
+            name: item.name,
+          },
+          roundsPlayed: item.roundsPlayed,
+          top8Average: item.average,
+          top8AverageNum: item.average === 'N/A' ? -1 : parseFloat(item.average),
+          overallAverage: item.overallAverage != null ? Number(item.overallAverage) : overallAverageFor(item.playerId),
+        }))
+        .sort(byStanding);
     }
 
-    const scores = currentHistoricalSeason.scores || {};
     // Use season players if available, otherwise fallback to global players
     const allPlayers = currentHistoricalSeason.players && currentHistoricalSeason.players.length > 0
       ? currentHistoricalSeason.players
@@ -292,36 +313,38 @@ function LeaderboardTab({ currentHistoricalSeason, fallbackPlayers }) {
 
       Object.keys(scores).forEach((weekKey) => {
         const weekData = scores[weekKey];
-        if (weekData[player.id]) {
+        if (weekData[player.id] && weekData[player.id].score > 0) {
           const scoreData = weekData[player.id];
-          // Use actual score (half if double) for average calculation
+          // Historical seasons store doubled values for double rounds
+          // For counting/averaging, use the stored value directly (which includes doubled value)
           const actualScore = scoreData.isDouble ? scoreData.score / 2 : scoreData.score;
           playerScores.push({
-            score: scoreData.score,
-            actualScore: actualScore,
+            score: scoreData.score, // Stored value (already doubled for double rounds)
+            actualScore: actualScore, // Display value (halved for double rounds)
             isDouble: scoreData.isDouble || false,
           });
         }
       });
 
-      // Calculate top N scores based on countRounds using actual scores
-      const sortedScores = [...playerScores].sort((a, b) => b.actualScore - a.actualScore);
+      // Calculate top N scores based on countRounds using stored scores (doubled values for counting)
+      const sortedScores = [...playerScores].sort((a, b) => b.score - a.score);
       const topScores = sortedScores.slice(0, countRounds);
       const topAverage = topScores.length > 0
-        ? (topScores.reduce((sum, s) => sum + s.actualScore, 0) / topScores.length).toFixed(2)
+        ? (topScores.reduce((sum, s) => sum + s.score, 0) / topScores.length).toFixed(2)
         : '-';
 
       return {
         player,
         roundsPlayed: playerScores.length,
-        top8Average: topAverage,
-        top8AverageNum: topScores.length > 0 ? parseFloat(topAverage) : 0,
+        top8Average: topScores.length >= countRounds ? topAverage : 'N/A',
+        top8AverageNum: topScores.length >= countRounds ? parseFloat(topAverage) : 0,
+        overallAverage: overallAverageFor(player.id),
       };
     });
 
     return stats
-      .filter((s) => s.roundsPlayed > 0)
-      .sort((a, b) => b.top8AverageNum - a.top8AverageNum);
+      .filter((s) => s.roundsPlayed >= countRounds)
+      .sort(byStanding);
   }, [currentHistoricalSeason, fallbackPlayers]);
 
   if (!currentHistoricalSeason) {
